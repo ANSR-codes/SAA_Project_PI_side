@@ -20,7 +20,7 @@ TRIG = 24
 ECHO = 16
 ACTUATOR_PIN = 22  # relay or motor control GPIO
 THRESHOLD_M = 0.4
-SERVER_URL = "http://YOUR_LAPTOP_IP:5000/check_actuator"  # <-- replace with your server IP
+SERVER_URL = "http://192.168.137.66:5000/check_actuator"  # <-- replace with your server IP
 DEVICE_ID = "pi_actuator_01"
 CAMERA_INDEX = 0
 # ===================
