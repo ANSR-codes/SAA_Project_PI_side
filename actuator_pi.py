@@ -17,7 +17,7 @@ import RPi.GPIO as GPIO
 
 # ===== CONFIG =====
 TRIG = 23
-ECHO = 24
+ECHO = 12
 ACTUATOR_PIN = 22  # relay or motor control GPIO
 THRESHOLD_M = 0.4
 SERVER_URL = "http://192.168.137.66:5000/check_actuator"  # <-- replace with your server IP
