@@ -30,7 +30,7 @@ MIN_LOOP_DELAY = 0.03     # main loop sleep
 # Servo angles (customize)
 SERVO_OPEN_ANGLE = 90     # angle to move to when "open"
 SERVO_CLOSED_ANGLE = 0    # resting/closed angle
-SERVO_MOVE_DELAY = 0.6    # seconds to hold position (servo travel time)
+SERVO_MOVE_DELAY = 1   # seconds to hold position (servo travel time)
 SERVO_PWM_FREQ = 50       # Hz for hobby servos
 
 # ===== end config =====
