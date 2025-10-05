@@ -16,8 +16,8 @@ import threading
 import RPi.GPIO as GPIO
 
 # ===== CONFIG =====
-TRIG = 23
-ECHO = 12
+TRIG_PIN = 24
+ECHO_PIN = 16
 ACTUATOR_PIN = 22  # relay or motor control GPIO
 THRESHOLD_M = 0.4
 SERVER_URL = "http://192.168.137.66:5000/check_actuator"  # <-- replace with your server IP
@@ -25,45 +25,58 @@ DEVICE_ID = "pi_actuator_01"
 CAMERA_INDEX = 0
 
 COOLDOWN_SECONDS = 5      # <---- new: cooldown after each trigger
-MIN_TIME_BETWEEN_MEASURE = 0.03  # loop sleep
-# ===================
+MIN_LOOP_DELAY = 0.03     # main loop sleep
+
+# Servo angles (customize)
+SERVO_OPEN_ANGLE = 90     # angle to move to when "open"
+SERVO_CLOSED_ANGLE = 0    # resting/closed angle
+SERVO_MOVE_DELAY = 0.6    # seconds to hold position (servo travel time)
+SERVO_PWM_FREQ = 50       # Hz for hobby servos
+
+# ===== end config =====
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(TRIG, GPIO.OUT)
-GPIO.setup(ECHO, GPIO.IN)
+
+# Setup pins
+GPIO.setup(TRIG_PIN, GPIO.OUT)
+GPIO.setup(ECHO_PIN, GPIO.IN)
 GPIO.setup(ACTUATOR_PIN, GPIO.OUT)
-GPIO.output(ACTUATOR_PIN, False)
+
+# Initialize servo PWM
+servo = GPIO.PWM(ACTUATOR_PIN, SERVO_PWM_FREQ)
+servo.start(0)  # start with 0% duty to be safe
 
 
 def measure_distance(timeout=0.02):
-    """Return distance (m) using ultrasonic sensor. Returns None on timeout."""
-    GPIO.output(TRIG, False)
+    """Measure distance (m) from HC-SR04 style sensor. Returns None on timeout."""
+    GPIO.output(TRIG_PIN, False)
     time.sleep(0.00005)
-    GPIO.output(TRIG, True)
+    GPIO.output(TRIG_PIN, True)
     time.sleep(0.00001)
-    GPIO.output(TRIG, False)
+    GPIO.output(TRIG_PIN, False)
 
-    start_time = time.time()
-    # wait for echo to go high
-    while GPIO.input(ECHO) == 0:
-        if time.time() - start_time > timeout:
+    start_t = time.time()
+    # wait for echo high
+    while GPIO.input(ECHO_PIN) == 0:
+        if time.time() - start_t > timeout:
             return None
     pulse_start = time.time()
-    # wait for echo to go low
-    while GPIO.input(ECHO) == 1:
+    # wait for echo low
+    while GPIO.input(ECHO_PIN) == 1:
         if time.time() - pulse_start > timeout:
             return None
     pulse_end = time.time()
     elapsed = pulse_end - pulse_start
+    # speed of sound ~343 m/s -> distance = elapsed * 343 / 2
     return (elapsed * 343.0) / 2.0
 
 
 def capture_image():
-    """Capture one frame as JPEG bytes."""
+    """Capture a single frame from camera and return JPEG bytes."""
     cam = cv2.VideoCapture(CAMERA_INDEX)
     if not cam.isOpened():
-        raise RuntimeError("Camera not available")
-    # warm up frames
+        raise RuntimeError("Camera not available (index={})".format(CAMERA_INDEX))
+    # warm up
     for _ in range(3):
         cam.read()
     ret, frame = cam.read()
@@ -74,77 +87,107 @@ def capture_image():
     return buf.tobytes()
 
 
-def actuator_pulse(duration=0.5):
-    """Pulse actuator (relay HIGH for duration seconds)."""
-    GPIO.output(ACTUATOR_PIN, True)
-    time.sleep(duration)
-    GPIO.output(ACTUATOR_PIN, False)
+def servo_set_angle(angle):
+    """
+    Set hobby servo to angle (0..180).
+    Duty cycle mapping: ~2% -> 0deg, ~12% -> 180deg (may vary by servo).
+    We set pulse then briefly wait and set duty to 0 to reduce jitter.
+    """
+    if angle < 0: angle = 0
+    if angle > 180: angle = 180
+    duty = 2.0 + (angle / 18.0)   # typical mapping
+    try:
+        servo.ChangeDutyCycle(duty)
+        time.sleep(SERVO_MOVE_DELAY)
+    finally:
+        # Stop sending pulses to reduce jitter; leaving servo holding may be necessary for your use-case
+        servo.ChangeDutyCycle(0)
 
 
-def send_to_server(img_bytes, t_detect):
-    """Send image to server and handle response."""
+def actuator_open():
+    """Move servo to 'open' position."""
+    servo_set_angle(SERVO_OPEN_ANGLE)
+
+
+def actuator_close():
+    """Move servo to 'closed' position."""
+    servo_set_angle(SERVO_CLOSED_ANGLE)
+
+
+def send_to_server_and_act(img_bytes, t_detect):
+    """Send image to server and perform action based on response."""
     files = {"image": ("img.jpg", io.BytesIO(img_bytes), "image/jpeg")}
     data = {"device_id": DEVICE_ID, "t": str(t_detect)}
     try:
         r = requests.post(SERVER_URL, files=files, data=data, timeout=10)
         if r.status_code != 200:
-            print("Server error:", r.status_code, r.text[:200])
+            print("Server returned status", r.status_code, r.text[:200])
             return
         resp = r.json()
         print("Server response:", resp)
-        if resp.get("action") == "open":
-            print("Actuator: OPEN command received")
-            actuator_pulse()
+        action = resp.get("action")
+        if action == "open":
+            print("Actuator command: OPEN -> moving servo")
+            actuator_open()
+            # Optionally close after a delay; comment out if you want it to stay open
+            time.sleep(10.0)
+            actuator_close()
+        elif action == "close":
+            print("Actuator command: CLOSE -> moving servo to closed")
+            actuator_close()
         else:
-            print("No actuation needed.")
+            print("No actuation ('none')")
     except Exception as e:
-        print("Error contacting server:", e)
+        print("Error contacting server or acting:", e)
 
 
-def main():
-    print("Actuator controller running with cooldown:", COOLDOWN_SECONDS, "seconds")
-    last_trigger = 0.0
+def main_loop():
+    print("Actuator (servo) controller running. Cooldown:", COOLDOWN_SECONDS, "s")
+    last_handled = 0.0
     object_present = False
 
     try:
         while True:
             d = measure_distance()
             now = time.time()
+
             if d is None:
-                # sensor timeout - treat as no object
+                # sensor timeout => treat as no object
                 object_present = False
             else:
-                # detect object
                 if d < THRESHOLD_M:
-                    # object is present
+                    # object present
                     if not object_present:
-                        # first detection edge (object just appeared)
+                        # rising edge: object just appeared
                         object_present = True
-                        # only handle if cooldown passed
-                        if now - last_trigger >= COOLDOWN_SECONDS:
-                            print(f"Object detected at {d:.2f} m — handling (cooldown passed).")
-                            # spawn worker to capture/send and possibly actuate
-                            threading.Thread(target=lambda: send_to_server(capture_image(), now), daemon=True).start()
-                            last_trigger = now
+                        if now - last_handled >= COOLDOWN_SECONDS:
+                            print(f"Object detected at {d:.2f} m; handling (cooldown ok)")
+                            # spawn worker to avoid blocking main loop
+                            threading.Thread(target=lambda: send_to_server_and_act(capture_image(), now), daemon=True).start()
+                            last_handled = now
                         else:
-                            print(f"Object detected but in cooldown ({now - last_trigger:.2f}s elapsed).")
+                            print(f"Object detected but still in cooldown ({now - last_handled:.2f}s elapsed)")
                     else:
-                        # object still present: do nothing (debounce)
+                        # still present -> do nothing (debounce)
                         pass
                 else:
                     # no object present
                     if object_present:
-                        # object just left
-                        print("Object left sensor area.")
+                        print("Object left sensor area")
                     object_present = False
 
-            time.sleep(MIN_TIME_BETWEEN_MEASURE)
+            time.sleep(MIN_LOOP_DELAY)
     except KeyboardInterrupt:
-        print("Stopping (KeyboardInterrupt).")
+        print("KeyboardInterrupt -> exiting")
     finally:
+        # cleanup
+        try:
+            servo.stop()
+        except Exception:
+            pass
         GPIO.output(ACTUATOR_PIN, False)
         GPIO.cleanup()
 
 
 if __name__ == "__main__":
-    main()
+    main_loop()
