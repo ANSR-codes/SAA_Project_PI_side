@@ -80,24 +80,25 @@ def main():
         try:
             dA = measure_distance(TRIG_A, ECHO_A)
             dB = measure_distance(TRIG_B, ECHO_B)
+        
+            now = time.time()
+            if state == "WAIT_A" and dA < THRESHOLD_M:
+                t1 = now
+                state = "WAIT_B"
+                print("Object passed sensor A")
+            elif state == "WAIT_B" and dB < THRESHOLD_M:
+                t2 = now
+                dt = t2 - t1 if t1 else 0
+                if dt > 0:
+                    speed = DIST_BETWEEN_M / dt
+                    print(f"Speed = {speed:.2f} m/s")
+                    threading.Thread(target=lambda: send_to_server(capture_image(), t1, t2, speed), daemon=True).start()
+                state = "WAIT_A"
+            time.sleep(0.05)
         except Exception as e:
             print("Sensor read error:", e)
             continue
 
-        now = time.time()
-        if state == "WAIT_A" and dA < THRESHOLD_M:
-            t1 = now
-            state = "WAIT_B"
-            print("Object passed sensor A")
-        elif state == "WAIT_B" and dB < THRESHOLD_M:
-            t2 = now
-            dt = t2 - t1 if t1 else 0
-            if dt > 0:
-                speed = DIST_BETWEEN_M / dt
-                print(f"Speed = {speed:.2f} m/s")
-                threading.Thread(target=lambda: send_to_server(capture_image(), t1, t2, speed), daemon=True).start()
-            state = "WAIT_A"
-        time.sleep(0.05)
 
 if __name__ == "__main__":
     try:
