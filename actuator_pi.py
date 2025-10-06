@@ -115,7 +115,7 @@ def actuator_close():
 
 
 # add/update at top of file or near config
-PASS_DURATION = float(os.environ.get("PASS_DURATION", 6.0))  # seconds to open when action == "open"
+PASS_DURATION = float(5.0)  # seconds to open when action == "open"
 
 def send_to_server_and_act(img_bytes, t_detect):
     """Send image to server and perform action based on response.action"""
