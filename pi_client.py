@@ -25,7 +25,7 @@ ECHO_B = 16
 
 DIST_BETWEEN_M = 0.50  # meters between sensors
 THRESHOLD_M = 0.4      # distance threshold to trigger
-SERVER_URL = "http://10.90.239.254:5000/process"  # <-- replace with your server IP
+SERVER_URL = "http://10.90.239.18:5000/process"  # <-- replace with your server IP
 DEVICE_ID = "pi_speed_01"
 CAMERA_INDEX = 0
 MEASURE_TIMEOUT = 0.03  # seconds (safe for sensors up to ~4 m)
