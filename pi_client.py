@@ -77,6 +77,7 @@ def main():
     t1 = None
     print("Speed sensor started. Waiting for object...")
     while True:
+        print("Inside WHile loop")
         try:
             dA = measure_distance(TRIG_A, ECHO_A)
             dB = measure_distance(TRIG_B, ECHO_B)
