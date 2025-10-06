@@ -5,7 +5,7 @@ GPIO.setmode(GPIO.BCM)
 TRIG = 23
 ECHO = 12
 
-print "Distance Measurement In Progress"
+print("Distance Measurement In Progress")
 
 GPIO.setup(TRIG,GPIO.OUT)
 GPIO.setup(ECHO,GPIO.IN)
