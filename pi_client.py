@@ -34,7 +34,7 @@ POLL_DELAY = 0.05
 
 # --- Proof-of-concept: send random image from folder instead of camera capture ---
 USE_RANDOM_IMAGE = True                  # set True to pick files, False to use camera
-IMAGE_FOLDER = "/home/Group6/sensors/_project/SAA_Project_Pi_Side"    # path to folder with sample images (update me)
+IMAGE_FOLDER = "/home/Group6/sensors/_project/SAA_Project_Pi_Side/test_images_inference"    # path to folder with sample images (update me)
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 # ==============================================================================
 
