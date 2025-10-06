@@ -114,8 +114,11 @@ def actuator_close():
     servo_set_angle(SERVO_CLOSED_ANGLE)
 
 
+# add/update at top of file or near config
+PASS_DURATION = float(os.environ.get("PASS_DURATION", 6.0))  # seconds to open when action == "open"
+
 def send_to_server_and_act(img_bytes, t_detect):
-    """Send image to server and perform action based on response."""
+    """Send image to server and perform action based on response.action"""
     files = {"image": ("img.jpg", io.BytesIO(img_bytes), "image/jpeg")}
     data = {"device_id": DEVICE_ID, "t": str(t_detect)}
     try:
@@ -127,19 +130,21 @@ def send_to_server_and_act(img_bytes, t_detect):
         print("Server response:", resp)
         action = resp.get("action")
         if action == "open":
-            print("Actuator command: OPEN -> moving servo")
+            # non-flagged: open briefly to let object pass, then close
+            print("Actuator command: OPEN -> moving servo to open for PASS_DURATION")
             actuator_open()
-            # Optionally close after a delay; comment out if you want it to stay open
-            time.sleep(10.0)
+            time.sleep(PASS_DURATION)
             actuator_close()
+            print("Actuator: closed after PASS_DURATION")
         elif action == "close":
-            print("Actuator command: CLOSE -> moving servo to closed")
+            # flagged: keep gate closed and mark it flagged (stay closed)
+            print("Actuator command: CLOSE -> keeping gate closed (flagged)")
             actuator_close()
+            # do NOT auto-open; wait for future server instruction to open
         else:
-            print("No actuation ('none')")
+            print("No actuation (action missing or 'none')")
     except Exception as e:
         print("Error contacting server or acting:", e)
-
 
 def main_loop():
     print("Actuator (servo) controller running. Cooldown:", COOLDOWN_SECONDS, "s")
