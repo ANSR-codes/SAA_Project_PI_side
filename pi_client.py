@@ -1,12 +1,11 @@
-# pi_client.py
+# improved_pi_client.py
 """
-Pi #1 — Speed Measurement Unit
----------------------------------
-- Two ultrasonic sensors (A and B)
-- Measures travel time of object between A -> B
-- Calculates speed
-- Captures image from camera
-- Sends image + metadata to server (/process)
+Pi #1 — Speed Measurement Unit (improved)
+ - Adds timeouts to ultrasonic reading (prevents infinite blocking)
+ - Prints debug info each loop
+ - Uses time.monotonic() for timing
+ - Safer thread closures when sending image
+ - Better camera error handling
 """
 
 import time
@@ -27,34 +26,67 @@ THRESHOLD_M = 0.4      # distance threshold to trigger
 SERVER_URL = "http://192.168.137.66:5000/process"  # <-- replace with your server IP
 DEVICE_ID = "pi_speed_01"
 CAMERA_INDEX = 0
+MEASURE_TIMEOUT = 0.03  # seconds (safe for sensors up to ~4 m)
+POLL_DELAY = 0.05
 # ===================
 
 GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+
 GPIO.setup(TRIG_A, GPIO.OUT)
-GPIO.setup(ECHO_A, GPIO.IN)
 GPIO.setup(TRIG_B, GPIO.OUT)
+GPIO.setup(ECHO_A, GPIO.IN)
 GPIO.setup(ECHO_B, GPIO.IN)
 
-def measure_distance(trig, echo):
-    """Return distance (m) using ultrasonic sensor."""
-    GPIO.output(trig, False)
-    time.sleep(0.00005)
-    GPIO.output(trig, True)
-    time.sleep(0.00001)
-    GPIO.output(trig, False)
-    start = time.time()
-    while GPIO.input(echo) == 0:
-        start = time.time()
-    while GPIO.input(echo) == 1:
-        stop = time.time()
-    return (stop - start) * 343 / 2  # m
+# Ensure TRIGs are low
+GPIO.output(TRIG_A, False)
+GPIO.output(TRIG_B, False)
+time.sleep(0.1)
+
+
+def measure_distance(trig, echo, timeout=MEASURE_TIMEOUT):
+    """
+    Trigger ultrasonic and measure pulse width. Returns distance in meters,
+    or None on timeout/error.
+    """
+    try:
+        # Send trigger pulse
+        GPIO.output(trig, False)
+        time.sleep(0.0002)
+        GPIO.output(trig, True)
+        time.sleep(0.00001)  # 10us pulse
+        GPIO.output(trig, False)
+
+        start_wait = time.monotonic()
+        # wait for echo to go HIGH
+        while GPIO.input(echo) == 0:
+            if time.monotonic() - start_wait > timeout:
+                return None
+        pulse_start = time.monotonic()
+
+        # wait for echo to go LOW
+        while GPIO.input(echo) == 1:
+            if time.monotonic() - pulse_start > timeout:
+                return None
+        pulse_end = time.monotonic()
+
+        duration = pulse_end - pulse_start
+        # Speed of sound ≈ 343 m/s; distance = (duration * speed) / 2
+        distance = duration * 343.0 / 2.0
+        return distance
+    except Exception as e:
+        print("measure_distance exception:", e, flush=True)
+        return None
+
 
 def capture_image():
-    """Capture a single frame from camera as JPEG bytes."""
+    """Capture a single frame from camera as JPEG bytes (raises on failure)."""
     cam = cv2.VideoCapture(CAMERA_INDEX)
     if not cam.isOpened():
         raise RuntimeError("Camera not available")
-    for _ in range(3): cam.read()
+    # warm up
+    for _ in range(3):
+        cam.read()
     ret, frame = cam.read()
     cam.release()
     if not ret:
@@ -62,48 +94,71 @@ def capture_image():
     _, buf = cv2.imencode('.jpg', frame)
     return buf.tobytes()
 
+
 def send_to_server(img_bytes, t1, t2, speed):
     """Send captured data to server."""
     files = {"image": ("img.jpg", io.BytesIO(img_bytes), "image/jpeg")}
     data = {"device_id": DEVICE_ID, "t1": str(t1), "t2": str(t2), "speed_m_s": str(speed)}
     try:
         r = requests.post(SERVER_URL, files=files, data=data, timeout=10)
-        print("Server:", r.status_code, r.text[:200])
+        print("Server:", r.status_code, r.text[:200], flush=True)
     except Exception as e:
-        print("Send error:", e)
+        print("Send error:", e, flush=True)
+
 
 def main():
     state = "WAIT_A"
     t1 = None
-    print("Speed sensor started. Waiting for object...")
+    print("Speed sensor started. Waiting for object...", flush=True)
+
     while True:
-        print("Inside WHile loop")
         try:
             dA = measure_distance(TRIG_A, ECHO_A)
             dB = measure_distance(TRIG_B, ECHO_B)
-        
-            now = time.time()
-            if state == "WAIT_A" and dA < THRESHOLD_M:
+
+            # debug print
+            print(f"Distances -> A: {dA if dA is not None else 'TO'} m, "
+                  f"B: {dB if dB is not None else 'TO'} m, state={state}", flush=True)
+
+            now = time.monotonic()
+
+            if state == "WAIT_A" and (dA is not None and dA < THRESHOLD_M):
                 t1 = now
                 state = "WAIT_B"
-                print("Object passed sensor A")
-            elif state == "WAIT_B" and dB < THRESHOLD_M:
+                print("Object passed sensor A", flush=True)
+
+            elif state == "WAIT_B" and (dB is not None and dB < THRESHOLD_M):
                 t2 = now
-                dt = t2 - t1 if t1 else 0
+                dt = (t2 - t1) if t1 else 0
                 if dt > 0:
                     speed = DIST_BETWEEN_M / dt
-                    print(f"Speed = {speed:.2f} m/s")
-                    threading.Thread(target=lambda: send_to_server(capture_image(), t1, t2, speed), daemon=True).start()
+                    print(f"Speed = {speed:.2f} m/s (dt={dt:.4f}s)", flush=True)
+
+                    # spawn thread that captures and sends image.
+                    # freeze t1,t2,speed into defaults to avoid closure mutation issues
+                    def worker(t1_=t1, t2_=t2, speed_=speed):
+                        try:
+                            img = capture_image()
+                        except Exception as e:
+                            print("Camera capture failed:", e, flush=True)
+                            return
+                        send_to_server(img, t1_, t2_, speed_)
+
+                    threading.Thread(target=worker, daemon=True).start()
+
                 state = "WAIT_A"
-            time.sleep(0.05)
+
+            time.sleep(POLL_DELAY)
+
+        except KeyboardInterrupt:
+            print("Exiting (KeyboardInterrupt)", flush=True)
+            break
         except Exception as e:
-            print("Sensor read error:", e)
-            continue
+            print("Main loop error:", e, flush=True)
+            time.sleep(0.2)
+
+    GPIO.cleanup()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        GPIO.cleanup()
-        print("Exiting...")
+    main()
