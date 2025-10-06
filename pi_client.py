@@ -1,7 +1,7 @@
 # improved_pi_client.py
 """
-Pi #1 — Speed Measurement Unit (improved)
- - Proof-of-concept mode: optionally send a random image from a folder instead of capturing camera.
+Pi #1 — Speed Measurement Unit (camera-only)
+ - Always captures an image from the camera when triggered (no random folder selection).
  - Adds timeouts to ultrasonic reading (prevents infinite blocking)
  - Prints debug info each loop
  - Uses time.monotonic() for timing
@@ -16,7 +16,6 @@ import cv2
 import threading
 import RPi.GPIO as GPIO
 import os
-import random
 
 # ===== CONFIG =====
 TRIG_A = 23
@@ -31,11 +30,6 @@ DEVICE_ID = "pi_speed_01"
 CAMERA_INDEX = 0
 MEASURE_TIMEOUT = 0.03  # seconds (safe for sensors up to ~4 m)
 POLL_DELAY = 0.05
-
-# --- Proof-of-concept: send random image from folder instead of camera capture ---
-USE_RANDOM_IMAGE = True                  # set True to pick files, False to use camera
-IMAGE_FOLDER = "/home/Group6/sensors_project/SAA_Project_Pi_Side/test_images_inference"    # path to folder with sample images (update me)
-IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 # ==============================================================================
 
 GPIO.setmode(GPIO.BCM)
@@ -103,63 +97,16 @@ def capture_image_camera():
     return buf.tobytes()
 
 
-def pick_random_image_from_folder():
-    """
-    Pick a random image file from IMAGE_FOLDER and return its bytes.
-    Returns None if no suitable file found or read error occurs.
-    """
-    try:
-        if not os.path.isdir(IMAGE_FOLDER):
-            print(f"IMAGE_FOLDER not found: {IMAGE_FOLDER}", flush=True)
-            return None
-        files = [os.path.join(IMAGE_FOLDER, f) for f in os.listdir(IMAGE_FOLDER)
-                 if os.path.isfile(os.path.join(IMAGE_FOLDER, f)) and f.lower().endswith(IMAGE_EXTS)]
-        if not files:
-            print(f"No images found in {IMAGE_FOLDER}", flush=True)
-            return None
-        chosen = random.choice(files)
-        print(f"Chosen test image: {chosen}", flush=True)
-        with open(chosen, "rb") as fh:
-            data = fh.read()
-            if not data:
-                print("Chosen image file was empty; falling back", flush=True)
-                return None
-            return data
-    except Exception as e:
-        print("pick_random_image_from_folder error:", e, flush=True)
-        return None
-
-
 def get_image_bytes_for_send():
     """
-    Returns JPEG bytes to send. If USE_RANDOM_IMAGE is True tries folder first,
-    otherwise uses camera capture. Falls back to camera if folder method fails.
+    Always use the camera to capture bytes for send.
+    Returns bytes or None on permanent failure.
     """
-    if USE_RANDOM_IMAGE:
-        img = pick_random_image_from_folder()
-        if img:
-            return img
-        else:
-            print("Falling back to camera capture (folder mode failed)", flush=True)
-    # try camera capture
     try:
         return capture_image_camera()
     except Exception as e:
         print("Camera capture failed:", e, flush=True)
-        # as a last resort, try reading any file from folder regardless of extension
-        if not USE_RANDOM_IMAGE:
-            return None
-        try:
-            # try any file in folder
-            files = [os.path.join(IMAGE_FOLDER, f) for f in os.listdir(IMAGE_FOLDER)
-                     if os.path.isfile(os.path.join(IMAGE_FOLDER, f))]
-            if files:
-                chosen = random.choice(files)
-                print(f"Last-resort chosen file: {chosen}", flush=True)
-                with open(chosen, "rb") as fh:
-                    return fh.read()
-        except Exception as e2:
-            print("Last-resort folder read failed:", e2, flush=True)
+        # no other fallback; return None to indicate failure
         return None
 
 
@@ -205,12 +152,12 @@ def main():
                     speed = DIST_BETWEEN_M / dt
                     print(f"Speed = {speed:.2f} m/s (dt={dt:.4f}s)", flush=True)
 
-                    # spawn thread that obtains image (random file or camera) and sends it.
+                    # spawn thread that captures image from camera and sends it.
                     # freeze t1,t2,speed into defaults to avoid closure mutation issues
                     def worker(t1_=t1, t2_=t2, speed_=speed):
                         img = get_image_bytes_for_send()
                         if img is None:
-                            print("Worker: no image obtained; aborting send", flush=True)
+                            print("Worker: camera capture failed; aborting send", flush=True)
                             return
                         send_to_server(img, t1_, t2_, speed_)
 
